@@ -3,12 +3,47 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Radar: pre-token protocols ranked by implied value</title>
+<title>Token Radar: Pre-token protocols ranked by implied value</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<a class="skip" href="#board">Skip to the board</a>
-<main id="board" tabindex="-1" aria-busy="true"></main>
+<a class="skip-link" href="#main-content">Skip to main content</a>
+<div class="app-container" id="app">
+  <header class="header">
+    <div class="brand">
+      <div class="brand-badge">TR</div>
+      <div>
+        <h1 class="brand-title">Token Radar</h1>
+        <p class="brand-sub">make.fun token launch intelligence</p>
+      </div>
+    </div>
+    <div class="header-meta" id="header-meta"></div>
+  </header>
+
+  <main id="main-content">
+    <section class="headline-block" id="headline-block"></section>
+
+    <div class="controls-bar" id="controls-bar"></div>
+
+    <section class="board-section">
+      <div class="table-card">
+        <div class="table-responsive" id="table-container"></div>
+      </div>
+    </section>
+
+    <section class="model-section" id="model-section"></section>
+  </main>
+
+  <footer class="footer">
+    <span>Token Radar • Sealed DeFi Snapshot Model</span>
+    <span id="footer-version"></span>
+  </footer>
+</div>
+
+<dialog id="detail-dialog" class="detail-dialog">
+  <div class="dialog-content" id="dialog-content"></div>
+</dialog>
+
 <script src="../data.js"></script>
 <script src="app.js"></script>
 </body>
