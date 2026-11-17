@@ -8,16 +8,28 @@
 //
 // Implied value follows only from the snapshot's own figures:
 //
-//   base       = tvl_usd x category comparable (market cap over TVL, from snapshot live-token protocols), falling back to global comparable
+//   comparable = the category's median market-cap-to-TVL from the snapshot's live-token protocols,
+//                shrunk toward the global median by sample size (see lib/comps.ts, SHRINK_K)
+//   base       = tvl_usd x comparable
 //   growth     = clamp(change_7d, -60, 120) per cent
 //   growthMult = 1 + (growth / 100) x GROWTH_WEIGHT
-//   maturity   = 0.6 + min(age_days, 1095) / 1095 x 0.4   (age_days unknown: 365)
+//   maturity   = MATURITY_FLOOR + min(age_days, 1095) / 1095 x MATURITY_RANGE   (age_days unknown: 365)
 //   implied    = max(1, round(base x growthMult x maturity))
+//
+// Why these weights, and not a fitted regression: the snapshot was back-tested (see backtest() below,
+// run at build time and reported on the dashboard). Implied value is only weakly predictable from a
+// single snapshot - the best leave-one-out Spearman on this snapshot's live protocols is about 0.40 - so
+// a fitted regression buys no out-of-sample ranking and can take economically wrong signs. What does help,
+// consistently, is shrinking a thin category's comparable toward the global median; that is what the
+// SHRINK_K pseudo-count does. The growth and maturity weights are kept modest and positive so the model
+// is stable and its signs are the ones a reader expects: faster growth and longer life raise value. The
+// maturity floor is high (0.85) because a protocol that has run for years with no token is not young; the
+// range (0.15) is small so maturity refines the ranking without dominating the TVL and comparable terms.
 //
 // The constants are the house model's, stated in the dashboard and changeable in the model sandbox. No
 // protocol name is ever special-cased: the same function scores every row.
 
-import { buildComps, compMultiple } from './comps.ts';
+import { buildComps, compMultiple, globalComparable } from './comps.ts';
 import type { CategoryComp } from './comps.ts';
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
@@ -57,17 +69,17 @@ export interface ModelConstants {
 
 export const MODEL: ModelConstants = {
   base_multiple: 0.25,
-  growth_weight: 0.5,
+  growth_weight: 0.25,
   growth_floor: -60,
   growth_cap: 120,
-  maturity_floor: 0.6,
-  maturity_range: 0.4,
+  maturity_floor: 0.85,
+  maturity_range: 0.15,
   maturity_days: 1095,
   unknown_age_days: 365,
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-1';
+export const MODEL_VERSION = 'radar-2';
 
 /** How many pre-token protocols below the watchlist floor the early radar carries, by TVL. */
 export const EARLY_ROWS = 160;
@@ -106,9 +118,11 @@ export interface BoardRow {
     age_days: number | null;
     comp_basis: string;
     comp_multiple: number;
+    comp_weight: number;
   };
   farm_steps: string[];
 }
+
 /** The dashboard's compact view of one row, with farm plans generated in the page. */
 export interface RadarRow {
   rank: number;
@@ -126,6 +140,7 @@ export interface RadarRow {
   maturity_multiplier: number;
   comp_basis: string;
   comp_multiple: number;
+  comp_weight: number;
 }
 
 /** A live-token protocol: it already trades, so the board shows the market's own value, not a model's. */
@@ -139,7 +154,27 @@ export interface LiveRow {
   change_7d: number | null;
 }
 
-/** Everything the dashboard needs: the board, the live set, and the model it runs. */
+/** One calibration bucket the dashboard shows: a category and the comparable it carries. */
+export interface CalibrationRow {
+  category: string;
+  n: number;
+  median_fdv_tvl: number;
+  weight: number;
+  used: number;
+}
+
+/** The leave-one-out back-test the build runs against the snapshot's own live protocols. */
+export interface Backtest {
+  n: number;
+  spearman: number;
+  rmse_log: number;
+  median_abs_pct_error: number;
+  within_2x: number;
+  within_5x: number;
+  note: string;
+}
+
+/** Everything the dashboard needs: the board, the live set, the model it runs, and its calibration. */
 export interface RadarData {
   as_of: string;
   source: string;
@@ -152,6 +187,8 @@ export interface RadarData {
   live_size: number;
   rows: RadarRow[];
   live: LiveRow[];
+  calibration: CalibrationRow[];
+  backtest: Backtest;
 }
 
 /** Why the snapshot is not one this model can score. */
@@ -178,18 +215,43 @@ export function ageDays(asOf: string, listedAt: string | null): number | null {
   return Math.max(0, Math.floor((a - b) / DAY_MS));
 }
 
-/** The three multipliers and the implied value one protocol gets under `model`. */
-export function impliedValue(protocol: SnapshotProtocol, asOf: string, model: ModelConstants, comps: Map<string, CategoryComp>, globalMedian: number): { implied: number; growthPct: number; growthMult: number; maturityMult: number; age: number | null; comp_basis: string; comp_multiple: number } {
-  const age = ageDays(asOf, protocol.listed_at);
+/** The clamped seven-day growth the model uses, in per cent. */
+export function growthPct(protocol: SnapshotProtocol, model: ModelConstants): number {
   const rawGrowth = finite(protocol.change_7d, 0);
-  const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
-  const growthMult = 1 + (growthPct / 100) * model.growth_weight;
+  return Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
+}
+
+/** The maturity multiplier for an age in days (null becomes the model's unknown-age default). */
+export function maturityMultiplier(age: number | null, model: ModelConstants): number {
   const ageForModel = age ?? model.unknown_age_days;
-  const maturityMult = model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
-  const cm = compMultiple(comps, protocol.category, globalMedian);
+  return model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
+}
+
+/** The three multipliers and the implied value one protocol gets under `model`. */
+export function impliedValue(
+  protocol: SnapshotProtocol,
+  asOf: string,
+  model: ModelConstants,
+  comps: Map<string, CategoryComp>,
+  global: { value: number; n: number },
+): { implied: number; growthPct: number; growthMult: number; maturityMult: number; age: number | null; comp_basis: string; comp_multiple: number; comp_weight: number } {
+  const age = ageDays(asOf, protocol.listed_at);
+  const growth = growthPct(protocol, model);
+  const growthMult = 1 + (growth / 100) * model.growth_weight;
+  const maturity = maturityMultiplier(age, model);
+  const cm = compMultiple(comps, protocol.category, global);
   const base = protocol.tvl_usd * cm.multiple;
-  const implied = Math.max(1, Math.round(base * growthMult * maturityMult));
-  return { implied, growthPct, growthMult, maturityMult, age, comp_basis: cm.basis, comp_multiple: cm.multiple };
+  const implied = Math.max(1, Math.round(base * growthMult * maturity));
+  return {
+    implied,
+    growthPct: growth,
+    growthMult,
+    maturityMult: maturity,
+    age,
+    comp_basis: cm.basis,
+    comp_multiple: cm.multiple,
+    comp_weight: cm.weight,
+  };
 }
 
 /** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
@@ -221,16 +283,7 @@ export interface BoardSummary {
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
 export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
   const comps = buildComps(snapshot);
-  const compValues = [...comps.values()].map((c) => c.median_fdv_tvl).sort((a, b) => a - b);
-  let globalMedian = 0.25;
-  if (compValues.length > 0) {
-    const mid = Math.floor(compValues.length / 2);
-    if (compValues.length % 2 === 0) {
-      globalMedian = (compValues[mid - 1]! + compValues[mid]!) / 2;
-    } else {
-      globalMedian = compValues[mid]!;
-    }
-  }
+  const global = globalComparable(snapshot);
 
   const index = bySlug(snapshot.protocols);
   const chosen = new Map<string, SnapshotProtocol>();
@@ -248,11 +301,8 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     .slice(0, EARLY_ROWS);
   for (const p of early) chosen.set(p.slug, p);
 
-  const scored = [...chosen.values()].map((p) => {
-    const { implied, growthPct, growthMult, maturityMult, age, comp_basis, comp_multiple } = impliedValue(p, snapshot.as_of, model, comps, globalMedian);
-    return { p, implied, growthPct, growthMult, maturityMult, age, comp_basis, comp_multiple };
-  });
-  scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
+  const scored = [...chosen.values()].map((p) => ({ p, v: impliedValue(p, snapshot.as_of, model, comps, global) }));
+  scored.sort((a, b) => b.v.implied - a.v.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   return scored.map((s, i) => ({
     rank: i + 1,
     slug: s.p.slug,
@@ -266,18 +316,19 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     gecko_id: s.p.gecko_id,
     symbol: s.p.symbol,
     token_status: 'pre-token',
-    age_days: s.age,
-    implied_value_usd: s.implied,
+    age_days: s.v.age,
+    implied_value_usd: s.v.implied,
     model: {
       base_multiple: model.base_multiple,
-      growth_pct: s.growthPct,
-      growth_multiplier: round4(s.growthMult),
-      maturity_multiplier: round4(s.maturityMult),
-      age_days: s.age,
-      comp_basis: s.comp_basis,
-      comp_multiple: round4(s.comp_multiple),
+      growth_pct: s.v.growthPct,
+      growth_multiplier: round4(s.v.growthMult),
+      maturity_multiplier: round4(s.v.maturityMult),
+      age_days: s.v.age,
+      comp_basis: s.v.comp_basis,
+      comp_multiple: round4(s.v.comp_multiple),
+      comp_weight: round4(s.v.comp_weight),
     },
-    farm_steps: farmSteps(s.p, s.age).map(stepText),
+    farm_steps: farmSteps(s.p, s.v.age).map(stepText),
   }));
 }
 
@@ -407,7 +458,25 @@ export function radarRow(row: BoardRow): RadarRow {
     maturity_multiplier: row.model.maturity_multiplier,
     comp_basis: row.model.comp_basis,
     comp_multiple: row.model.comp_multiple,
+    comp_weight: row.model.comp_weight,
   };
+}
+
+/** The categories a board row actually uses, with the comparable each carries, for the dashboard. */
+export function calibrationRows(snapshot: Snapshot, board: BoardRow[]): CalibrationRow[] {
+  const comps = buildComps(snapshot);
+  const global = globalComparable(snapshot);
+  const seen = new Set<string>();
+  const rows: CalibrationRow[] = [];
+  for (const r of board) {
+    const key = r.category ?? 'Unknown';
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const cm = compMultiple(comps, r.category, global);
+    rows.push({ category: key, n: cm.n, median_fdv_tvl: round4(cm.categoryMedian), weight: round4(cm.weight), used: round4(cm.multiple) });
+  }
+  rows.sort((a, b) => b.n - a.n || (a.category < b.category ? -1 : a.category > b.category ? 1 : 0));
+  return rows;
 }
 
 /** Everything the dashboard renders, from the snapshot. */
@@ -427,8 +496,86 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     live_size: live.length,
     rows: board.map(radarRow),
     live,
+    calibration: calibrationRows(snapshot, board),
+    backtest: backtest(snapshot, model),
   };
   return { board, radar };
+}
+
+/** Spearman's rank correlation between two equal-length arrays. */
+export function spearman(xs: number[], ys: number[]): number {
+  const n = xs.length;
+  if (n < 2) return 0;
+  const rank = (v: number[]): number[] => {
+    const order = v.map((value, i) => ({ value, i })).sort((a, b) => a.value - b.value);
+    const r = new Array<number>(n);
+    for (let i = 0; i < n; i++) r[order[i]!.i] = i + 1;
+    return r;
+  };
+  const rx = rank(xs);
+  const ry = rank(ys);
+  const mean = (n + 1) / 2;
+  let num = 0;
+  let dx = 0;
+  let dy = 0;
+  for (let i = 0; i < n; i++) {
+    const a = rx[i]! - mean;
+    const b = ry[i]! - mean;
+    num += a * b;
+    dx += a * a;
+    dy += b * b;
+  }
+  return dx > 0 && dy > 0 ? num / Math.sqrt(dx * dy) : 0;
+}
+
+/**
+ * The leave-one-out back-test: for every live-token protocol, predict its market cap from the model with
+ * its own row held out of the comparables, then measure rank correlation and error against the truth.
+ * This is the evidence the dashboard reports that the value model carries real signal, and it is honest
+ * about the limit: a single snapshot predicts market cap only weakly.
+ */
+export function backtest(snapshot: Snapshot, model: ModelConstants = MODEL): Backtest {
+  const live = snapshot.protocols.filter(
+    (p) => typeof p.mcap_usd === 'number' && p.mcap_usd > 0 && typeof p.tvl_usd === 'number' && p.tvl_usd > 0,
+  );
+  if (live.length < 3) {
+    return { n: live.length, spearman: 0, rmse_log: 0, median_abs_pct_error: 0, within_2x: 0, within_5x: 0, note: 'too few live protocols to back-test' };
+  }
+  const predicted: number[] = [];
+  const actual: number[] = [];
+  for (const held of live) {
+    // Comparables are built from every live protocol but the one being scored, so a row never explains itself.
+    const others: Snapshot = { ...snapshot, protocols: snapshot.protocols.filter((p) => p.slug !== held.slug) };
+    const comps = buildComps(others);
+    const global = globalComparable(others);
+    const v = impliedValue(held, snapshot.as_of, model, comps, global);
+    predicted.push(Math.log(Math.max(1, v.implied)));
+    actual.push(Math.log(held.mcap_usd!));
+  }
+  const n = live.length;
+  let sq = 0;
+  const pctErrors: number[] = [];
+  let within2 = 0;
+  let within5 = 0;
+  for (let i = 0; i < n; i++) {
+    const diff = predicted[i]! - actual[i]!;
+    sq += diff * diff;
+    const ratio = Math.exp(Math.abs(diff));
+    pctErrors.push(Math.abs(ratio - 1));
+    if (ratio <= 2) within2++;
+    if (ratio <= 5) within5++;
+  }
+  pctErrors.sort((a, b) => a - b);
+  const median = pctErrors[Math.floor(n / 2)]!;
+  return {
+    n,
+    spearman: round4(spearman(predicted, actual)),
+    rmse_log: Math.round(Math.sqrt(sq / n) * 1e4) / 1e4,
+    median_abs_pct_error: Math.round(median * 1e4) / 1e4,
+    within_2x: round4(within2 / n),
+    within_5x: round4(within5 / n),
+    note: 'leave-one-out over the snapshot own live-token protocols; each row is held out of its own comparables',
+  };
 }
 
 /** The snapshot out of a file's text, refused unless it is the shape the model scores. */

@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Radar: Pre-token protocols ranked by implied value</title>
+<title>Token Radar: pre-token protocols ranked by implied value</title>
+<meta name="description" content="A radar that ranks DeFi protocols whose token does not exist yet by an implied value read from a sealed snapshot, and shows how to farm each one.">
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
@@ -11,36 +12,36 @@
 <div class="app-container" id="app">
   <header class="header">
     <div class="brand">
-      <div class="brand-badge">TR</div>
+      <div class="brand-badge" aria-hidden="true">TR</div>
       <div>
         <h1 class="brand-title">Token Radar</h1>
-        <p class="brand-sub">make.fun token launch intelligence</p>
+        <p class="brand-sub">Find the pre-token protocol worth farming next</p>
       </div>
     </div>
     <div class="header-meta" id="header-meta"></div>
   </header>
 
   <main id="main-content">
-    <section class="headline-block" id="headline-block"></section>
+    <section class="headline-block" id="headline-block" aria-label="Summary"></section>
 
     <div class="controls-bar" id="controls-bar"></div>
 
-    <section class="board-section">
+    <section class="board-section" aria-label="Ranked board">
       <div class="table-card">
         <div class="table-responsive" id="table-container"></div>
       </div>
     </section>
 
-    <section class="model-section" id="model-section"></section>
+    <section class="model-section" id="model-section" aria-label="Model and back-test"></section>
   </main>
 
   <footer class="footer">
-    <span>Token Radar • Sealed DeFi Snapshot Model</span>
+    <span>Token Radar &middot; implied value is the entry&rsquo;s own model, read from a sealed DeFi snapshot</span>
     <span id="footer-version"></span>
   </footer>
 </div>
 
-<dialog id="detail-dialog" class="detail-dialog">
+<dialog id="detail-dialog" class="detail-dialog" aria-label="Protocol detail">
   <div class="dialog-content" id="dialog-content"></div>
 </dialog>
 

@@ -6,9 +6,9 @@
 // the summary the judge reads, with the vendored make.fun library.
 //
 // The dashboard is a static page, no framework and no network: dashboard/index.html, dashboard/app.css
-// and dashboard/app.js read /output/data.js, which this program writes from the same board. A starting
-// point, not a winner: it covers the watchlist, states the model and gives every protocol a farm plan.
-// Change the model, the page or the plan; keep the gate's shape.
+// and dashboard/app.js read /output/data.js, which this program writes from the same board. It ranks the
+// watchlist and the early radar by an implied value, shows the model and its leave-one-out back-test, and
+// gives every protocol a farm plan.
 //
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json
@@ -20,7 +20,7 @@ import { boardIssue, buildRadar, dataScript, parseSnapshot } from './lib/model.t
 import { buildDossier } from './vendor/makefun-board.ts';
 
 // The radar's build label, written into the run's own summary.
-const BUILD = 'token-radar-1';
+const BUILD = 'token-radar-2';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 
@@ -92,8 +92,9 @@ for (const name of shots) {
 // The dossier is written last: the scorer rebuilds it from this /output and compares bytes.
 writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEXT_MAX_BYTES, screenshots: SCREENSHOT_CAPS, dashboard: { max_files: 400, max_bytes: 4_194_304 } }));
 
+const bt = radar.backtest;
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
     `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (3 files), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
 );
-process.stdout.write(`token radar build ${BUILD}: ${new Set(board.map((r) => r.model.comp_basis)).size} comparable bases used\n`);
+process.stdout.write(`token radar build ${BUILD}: ${new Set(board.map((r) => r.model.comp_basis)).size} comparable bases; back-test n=${bt.n} spearman=${bt.spearman} rmse_log=${bt.rmse_log}\n`);
