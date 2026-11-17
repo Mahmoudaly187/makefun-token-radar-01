@@ -17,6 +17,7 @@
     q: '',
     category: 'all',
     chain: 'all',
+    watchlistOnly: false,
     tab: 'pre-token', // 'pre-token' or 'live'
     sort: 'rank',     // rank | name | tvl | growth | age | implied | comp
     dir: 1,
@@ -80,33 +81,51 @@
     return 30;
   }
 
+  function tvlWords(tvl) {
+    if (tvl >= 1e9) return '$' + (tvl / 1e9).toFixed(1) + 'B';
+    if (tvl >= 1e6) return '$' + Math.round(tvl / 1e6) + 'M';
+    return '$' + Math.round(tvl / 1e3) + 'K';
+  }
+
+  function ageWords(age) {
+    if (age === null || age === undefined) return 'an unrecorded time';
+    if (age >= 730) return (age / 365).toFixed(1) + ' years';
+    if (age >= 365) return 'a year';
+    if (age >= 60) return Math.round(age / 30) + ' months';
+    return age + ' days';
+  }
+
   function actionFor(p, capital, chain) {
     var c = (p.category || '').toLowerCase();
     var name = p.name;
-    if (c.indexOf('lend') >= 0 || c.indexOf('cdp') >= 0 || c.indexOf('collateral') >= 0) return 'Supply $' + capital + ' of USDC to ' + name + ' on ' + chain + ' and keep the position open.';
-    if (c.indexOf('dex') >= 0 || c.indexOf('yield') >= 0 || c.indexOf('leveraged farm') >= 0) return 'Provide $' + capital + ' of liquidity to ' + name + "'s main pool on " + chain + ' and keep the position open.';
-    if (c.indexOf('bridge') >= 0) return 'Bridge $' + capital + ' of USDC to ' + chain + ' through ' + name + ' and use the bridged funds in its app.';
-    if (c.indexOf('staking') >= 0 || c.indexOf('restak') >= 0) return 'Stake $' + capital + " of the chain's staking asset through " + name + ' and keep the receipt.';
-    if (c.indexOf('perpetual') >= 0 || c.indexOf('derivative') >= 0) return 'Deposit $' + capital + ' of USDC as margin on ' + name + ' and open one small hedge.';
-    if (c.indexOf('prediction') >= 0) return 'Fund $' + capital + ' and place one market position on ' + name + '.';
-    if (c.indexOf('curator') >= 0 || c.indexOf('allocator') >= 0) return 'Deposit $' + capital + ' into a ' + name + ' vault on ' + chain + ' and keep the shares.';
-    if (c.indexOf('stable') >= 0) return 'Mint or deposit $' + capital + ' of the stable asset through ' + name + ' on ' + chain + '.';
-    if (c.indexOf('rwa') >= 0) return "Mint $" + capital + " of the protocol's yield asset on " + chain + ' and hold it.';
-    if (c.indexOf('insurance') >= 0) return 'Buy $' + capital + ' of cover from ' + name + ' on ' + chain + ' and keep the policy.';
-    return 'Deposit $' + capital + ' of USDC into ' + name + ' on ' + chain + ' and keep the position open.';
+    if (c.indexOf('lend') >= 0 || c.indexOf('cdp') >= 0 || c.indexOf('collateral') >= 0) return 'supply $' + capital + ' of USDC to ' + name + ' on ' + chain + ' and keep the position open';
+    if (c.indexOf('dex') >= 0 || c.indexOf('yield') >= 0 || c.indexOf('leveraged farm') >= 0) return 'provide $' + capital + " of liquidity to " + name + "'s main pool on " + chain + ' and keep the position open';
+    if (c.indexOf('bridge') >= 0) return 'bridge $' + capital + ' of USDC to ' + chain + ' through ' + name + ' and use the bridged funds in its app';
+    if (c.indexOf('staking') >= 0 || c.indexOf('restak') >= 0) return 'stake $' + capital + " of the chain's staking asset through " + name + ' and keep the receipt';
+    if (c.indexOf('perpetual') >= 0 || c.indexOf('derivative') >= 0) return 'deposit $' + capital + ' of USDC as margin on ' + name + ' and open one small hedge';
+    if (c.indexOf('prediction') >= 0) return 'fund $' + capital + ' and place one market position on ' + name;
+    if (c.indexOf('curator') >= 0 || c.indexOf('allocator') >= 0) return 'deposit $' + capital + ' into a ' + name + ' vault on ' + chain + ' and keep the shares';
+    if (c.indexOf('stable') >= 0) return 'mint or deposit $' + capital + ' of the stable asset through ' + name + ' on ' + chain;
+    if (c.indexOf('rwa') >= 0) return "mint $" + capital + " of the protocol's yield asset on " + chain + ' and hold it';
+    if (c.indexOf('insurance') >= 0) return 'buy $' + capital + ' of cover from ' + name + ' on ' + chain + ' and keep the policy';
+    return 'deposit $' + capital + ' of USDC into ' + name + ' on ' + chain + ' and keep the position open';
   }
 
   function farmSteps(p) {
     var chain = chainOf(p);
     var capital = capitalFor(p);
     var hold = holdDaysFor(p.age_days);
+    var action = actionFor(p, capital, chain);
+    var tvl = tvlWords(p.tvl_usd);
+    var ran = ageWords(p.age_days);
     return [
-      { text: 'Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.', cost: 'under $3 of gas for the first transaction', time: '5 minutes' },
-      { text: actionFor(p, capital, chain), cost: '$' + capital + ' of capital and about $' + (capital >= 150 ? 8 : 4) + ' of gas', time: '15 minutes to set up' },
-      { text: 'Make one qualifying action each week, such as a deposit, a borrow, a swap or a vote.', cost: 'about $2 of gas a week', time: '10 minutes a week' },
-      { text: 'Hold the position for at least ' + hold + ' days so the activity is counted in more than one snapshot.', cost: 'the $' + capital + ' stays in the position', time: hold + ' days' },
-      { text: "Before you withdraw, open the protocol's own points or rewards page and claim only from the link it publishes.", cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
-      { text: 'Write the wallet, the dates and every transaction in a farm log so you can repeat the position or unwind it.', cost: 'nothing but the log', time: '5 minutes' }
+      { text: 'Open a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline; never reuse a wallet that holds other assets.', cost: 'under $3 of gas for the first transaction', time: '5 minutes' },
+      { text: 'On ' + chain + ', ' + action + '. ' + p.name + ' holds ' + tvl + ' of TVL, so $' + capital + ' is a position that registers with it without risking much.', cost: '$' + capital + ' of capital and about $' + (capital >= 150 ? 8 : 4) + ' of gas', time: '15 minutes to set up' },
+      { text: 'Make one qualifying action every week — a deposit, a borrow, a swap or a vote — so the activity is counted in more than one weekly snapshot.', cost: 'about $2 of gas a week', time: '10 minutes a week' },
+      { text: p.name + ' has run ' + ran + ' with no token, so hold the position at least ' + hold + ' days; a longer, unbroken record is what a launch rewards.', cost: 'the $' + capital + ' stays in the position', time: hold + ' days' },
+      { text: "Before you withdraw, open " + p.name + "'s own docs or points page and confirm the current reward rule, because a season's rules change between rounds.", cost: 'nothing to read the rules', time: '10 minutes' },
+      { text: 'Claim only from a link ' + p.name + ' publishes on its own site or docs — never a link from a direct message or an advertisement.', cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
+      { text: 'Write the wallet, the dates and every transaction in a farm log, so you can repeat the position or unwind it without guessing.', cost: 'nothing but the log', time: '5 minutes' }
     ];
   }
 
@@ -209,6 +228,7 @@
       +   '<button type="button" class="tab-btn" id="tab-pre" aria-pressed="' + (state.tab === 'pre-token') + '">Pre-token (' + DATA.rows.length + ')</button>'
       +   '<button type="button" class="tab-btn" id="tab-live" aria-pressed="' + (state.tab === 'live') + '">Already trading (' + DATA.live.length + ')</button>'
       + '</div>'
+      + '<button type="button" class="tab-btn filter-btn" id="watch-only" aria-pressed="' + state.watchlistOnly + '">Watchlist only (' + DATA.watchlist_size + ')</button>'
       + '<div class="results-count" id="results-count"></div>';
 
     document.getElementById('search-box').addEventListener('input', function (e) { state.q = e.target.value; writeHash(); renderTable(); });
@@ -216,6 +236,7 @@
     document.getElementById('chain-select').addEventListener('change', function (e) { state.chain = e.target.value; writeHash(); renderTable(); });
     document.getElementById('tab-pre').addEventListener('click', function () { state.tab = 'pre-token'; writeHash(); renderControls(); renderTable(); });
     document.getElementById('tab-live').addEventListener('click', function () { state.tab = 'live'; writeHash(); renderControls(); renderTable(); });
+    document.getElementById('watch-only').addEventListener('click', function () { state.watchlistOnly = !state.watchlistOnly; writeHash(); renderControls(); renderTable(); });
   }
 
   // ---- filter and sort --------------------------------------------------
@@ -223,6 +244,7 @@
   function matches(r) {
     if (state.category !== 'all' && (r.category || 'Other') !== state.category) return false;
     if (state.chain !== 'all' && (r.chains || []).indexOf(state.chain) < 0) return false;
+    if (state.watchlistOnly && !r.on_watchlist) return false;
     var q = state.q.trim().toLowerCase();
     if (!q) return true;
     var hay = [r.name, r.slug, r.category, (r.chains || []).join(' ')].join(' ').toLowerCase();
@@ -311,7 +333,8 @@
           + '<td class="rank-cell mono">#' + r.rank + '</td>'
           + '<td><div class="protocol-cell"><span class="protocol-name">' + escapeHtml(r.name) + '</span>'
           + '<div class="protocol-meta"><span>' + escapeHtml(r.category || 'Other') + '</span>'
-          + (chainText ? '<span class="chain-pill">' + escapeHtml(chainText) + '</span>' : '') + '</div></div></td>'
+          + (chainText ? '<span class="chain-pill">' + escapeHtml(chainText) + '</span>' : '')
+          + (r.on_watchlist ? '<span class="watch-pill">Watchlist</span>' : '') + '</div></div></td>'
           + '<td class="mono num">' + fmtUsd(r.tvl_usd) + '</td>'
           + '<td class="mono num ' + chgClass + '">' + fmtPct(r.change_7d) + '</td>'
           + '<td class="mono num">' + fmtAge(r.age_days) + '</td>'

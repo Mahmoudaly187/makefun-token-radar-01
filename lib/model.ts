@@ -141,6 +141,7 @@ export interface RadarRow {
   comp_basis: string;
   comp_multiple: number;
   comp_weight: number;
+  on_watchlist: boolean;
 }
 
 /** A live-token protocol: it already trades, so the board shows the market's own value, not a model's. */
@@ -363,60 +364,84 @@ function holdDaysFor(age: number | null): number {
   return 30;
 }
 
+/** A compact TVL string for the plan's prose, so each step names the protocol's own size. */
+function tvlWords(tvl: number): string {
+  if (tvl >= 1_000_000_000) return `$${(tvl / 1_000_000_000).toFixed(1)}B`;
+  if (tvl >= 1_000_000) return `$${Math.round(tvl / 1_000_000)}M`;
+  return `$${Math.round(tvl / 1_000)}K`;
+}
+
+/** How long the protocol has run with no token, in words. */
+function ageWords(age: number | null): string {
+  if (age === null) return 'an unrecorded time';
+  if (age >= 730) return `${(age / 365).toFixed(1)} years`;
+  if (age >= 365) return 'a year';
+  if (age >= 60) return `${Math.round(age / 30)} months`;
+  return `${age} days`;
+}
+
 /** The category's one action, in the words a farmer can follow. */
 function actionFor(p: SnapshotProtocol, capital: number, chain: string): string {
   const c = (p.category ?? '').toLowerCase();
   const name = p.name;
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Supply $${capital} of USDC to ${name} on ${chain} and keep the position open.`;
-  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return `Provide $${capital} of liquidity to ${name}'s main pool on ${chain} and keep the position open.`;
-  if (c.includes('bridge')) return `Bridge $${capital} of USDC to ${chain} through ${name} and use the bridged funds in its app.`;
-  if (c.includes('staking') || c.includes('restak')) return `Stake $${capital} of the chain's staking asset through ${name} and keep the receipt.`;
-  if (c.includes('perpetual') || c.includes('derivative')) return `Deposit $${capital} of USDC as margin on ${name} and open one small hedge.`;
-  if (c.includes('prediction')) return `Fund $${capital} and place one market position on ${name}.`;
-  if (c.includes('curator') || c.includes('allocator')) return `Deposit $${capital} into a ${name} vault on ${chain} and keep the shares.`;
-  if (c.includes('stable')) return `Mint or deposit $${capital} of the stable asset through ${name} on ${chain}.`;
-  if (c.includes('rwa')) return `Mint $${capital} of the protocol's yield asset on ${chain} and hold it.`;
-  if (c.includes('insurance')) return `Buy $${capital} of cover from ${name} on ${chain} and keep the policy.`;
-  return `Deposit $${capital} of USDC into ${name} on ${chain} and keep the position open.`;
+  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `supply $${capital} of USDC to ${name} on ${chain} and keep the position open`;
+  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return `provide $${capital} of liquidity to ${name}'s main pool on ${chain} and keep the position open`;
+  if (c.includes('bridge')) return `bridge $${capital} of USDC to ${chain} through ${name} and use the bridged funds in its app`;
+  if (c.includes('staking') || c.includes('restak')) return `stake $${capital} of the chain's staking asset through ${name} and keep the receipt`;
+  if (c.includes('perpetual') || c.includes('derivative')) return `deposit $${capital} of USDC as margin on ${name} and open one small hedge`;
+  if (c.includes('prediction')) return `fund $${capital} and place one market position on ${name}`;
+  if (c.includes('curator') || c.includes('allocator')) return `deposit $${capital} into a ${name} vault on ${chain} and keep the shares`;
+  if (c.includes('stable')) return `mint or deposit $${capital} of the stable asset through ${name} on ${chain}`;
+  if (c.includes('rwa')) return `mint $${capital} of the protocol's yield asset on ${chain} and hold it`;
+  if (c.includes('insurance')) return `buy $${capital} of cover from ${name} on ${chain} and keep the policy`;
+  return `deposit $${capital} of USDC into ${name} on ${chain} and keep the position open`;
 }
 
 /**
- * A protocol's farm plan: six steps, each an action with a cost and a time. The plan is derived from
- * the protocol's own record (category, chains, TVL, age), never from a hand-written list of names.
+ * A protocol's farm plan: seven steps, each an action with a cost and a time, each naming the
+ * protocol's own figures (its TVL, chain, category and how long it has run with no token). The plan is
+ * derived from the protocol's own record, never from a hand-written list of names.
  */
 export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
   const chain = chainOf(p);
   const capital = capitalFor(p);
   const hold = holdDaysFor(age);
   const action = actionFor(p, capital, chain);
+  const tvl = tvlWords(p.tvl_usd);
+  const ran = ageWords(age);
   return [
     {
-      text: `Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.`,
+      text: `Open a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline; never reuse a wallet that holds other assets.`,
       cost: 'under $3 of gas for the first transaction',
       time: '5 minutes',
     },
     {
-      text: action,
+      text: `On ${chain}, ${action}. ${p.name} holds ${tvl} of TVL, so $${capital} is a position that registers with it without risking much.`,
       cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`,
       time: '15 minutes to set up',
     },
     {
-      text: `Make one qualifying action each week, such as a deposit, a borrow, a swap or a vote.`,
+      text: `Make one qualifying action every week — a deposit, a borrow, a swap or a vote — so the activity is counted in more than one weekly snapshot.`,
       cost: 'about $2 of gas a week',
       time: '10 minutes a week',
     },
     {
-      text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`,
+      text: `${p.name} has run ${ran} with no token, so hold the position at least ${hold} days; a longer, unbroken record is what a launch rewards.`,
       cost: `the $${capital} stays in the position`,
       time: `${hold} days`,
     },
     {
-      text: `Before you withdraw, open the protocol's own points or rewards page and claim only from the link it publishes.`,
+      text: `Before you withdraw, open ${p.name}'s own docs or points page and confirm the current reward rule, because a season's rules change between rounds.`,
+      cost: 'nothing to read the rules',
+      time: '10 minutes',
+    },
+    {
+      text: `Claim only from a link ${p.name} publishes on its own site or docs — never a link from a direct message or an advertisement.`,
       cost: 'no fee to check, and never pay to claim',
       time: '10 minutes',
     },
     {
-      text: `Write the wallet, the dates and every transaction in a farm log so you can repeat the position or unwind it.`,
+      text: `Write the wallet, the dates and every transaction in a farm log, so you can repeat the position or unwind it without guessing.`,
       cost: 'nothing but the log',
       time: '5 minutes',
     },
@@ -441,7 +466,7 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
 }
 
 /** A board row's compact form for data.js, with the farm plan generated in the page. */
-export function radarRow(row: BoardRow): RadarRow {
+export function radarRow(row: BoardRow, onWatchlist: boolean): RadarRow {
   return {
     rank: row.rank,
     slug: row.slug,
@@ -459,6 +484,7 @@ export function radarRow(row: BoardRow): RadarRow {
     comp_basis: row.model.comp_basis,
     comp_multiple: row.model.comp_multiple,
     comp_weight: row.model.comp_weight,
+    on_watchlist: onWatchlist,
   };
 }
 
@@ -483,7 +509,8 @@ export function calibrationRows(snapshot: Snapshot, board: BoardRow[]): Calibrat
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
   const board = buildBoard(snapshot, model);
   const live = liveRows(snapshot);
-  const early = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;
+  const watchlist = new Set(snapshot.watchlist);
+  const early = board.filter((r) => !watchlist.has(r.slug)).length;
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
@@ -494,7 +521,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     board_size: board.length,
     early_size: early,
     live_size: live.length,
-    rows: board.map(radarRow),
+    rows: board.map((r) => radarRow(r, watchlist.has(r.slug))),
     live,
     calibration: calibrationRows(snapshot, board),
     backtest: backtest(snapshot, model),
